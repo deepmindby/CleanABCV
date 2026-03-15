@@ -195,7 +195,8 @@ class ABCCoTVector(BaseCoTVectorMethod):
     def __init__(self, model_wrapper, tokenizer, layer_idx, dataset_type="gsm8k",
                  abc_hidden_dim=512, kl_beta=1.0, kl_warmup_steps=0, sigma_min=1e-4,
                  learning_rate=1e-4, weight_decay=1e-3, warmup_ratio=0.1,
-                 num_epochs=5, batch_size=2, gradient_accumulation_steps=2, max_length=1024):
+                 num_epochs=5, batch_size=2, gradient_accumulation_steps=2, max_length=1024,
+                 g_init=0.0):
         super().__init__(model_wrapper, tokenizer, layer_idx, dataset_type)
         
         self.abc_hidden_dim = abc_hidden_dim
@@ -216,7 +217,7 @@ class ABCCoTVector(BaseCoTVectorMethod):
         
         self.prior_net = PriorNetwork(hidden_size, abc_hidden_dim, self.z_dim)
         self.posterior_net = PosteriorNetwork(2 * hidden_size, abc_hidden_dim, self.z_dim)
-        self.gate = nn.Parameter(torch.tensor(0.05))
+        self.gate = nn.Parameter(torch.tensor(g_init))
         self.prompt_template = PROMPT_TEMPLATES.get(dataset_type, PROMPT_TEMPLATES["gsm8k"])
         self.trained = False
     
@@ -269,7 +270,7 @@ class ABCCoTVector(BaseCoTVectorMethod):
         self.posterior_net = self.posterior_net.to(device)
         self.gate.data = self.gate.data.to(device)
     
-    def train(self, support_samples, wandb_run=None):
+    def train(self, support_samples):
         print(f"Training ABC Vector at layer {self.layer_idx}...")
         print(f"  Samples: {len(support_samples)}, Epochs: {self.num_epochs}")
         print(f"  ABC Config: hidden_dim={self.abc_hidden_dim}, kl_beta={self.kl_beta}, "
@@ -400,12 +401,6 @@ class ABCCoTVector(BaseCoTVectorMethod):
             print(f"  Epoch {epoch+1}: loss={avg_loss:.4f}, nll={avg_nll:.4f}, "
                   f"kl={avg_kl:.4f}, gate={self.gate.item():.4f}")
             
-            if wandb_run:
-                wandb_run.log({"epoch": epoch+1, "train/loss": avg_loss,
-                               "train/nll": avg_nll, "train/kl": avg_kl,
-                               "train/gate": self.gate.item(),
-                               "train/lr": scheduler.get_last_lr()[0]})
-            
             if avg_loss < best_loss:
                 best_loss = avg_loss
             torch.cuda.empty_cache()
@@ -414,11 +409,14 @@ class ABCCoTVector(BaseCoTVectorMethod):
         self.trained = True
         print(f"Training complete. Gate={self.gate.item():.4f}")
     
-    def eval(self, test_samples, max_new_tokens=512, num_beams=3, use_early_stopping=False):
+    def eval(self, test_samples, max_new_tokens=512, num_beams=3, use_early_stopping=False, max_length=None):
         """Evaluate with z* = mu_phi(Q) from prior."""
         if not self.trained:
             print("Warning: ABC Vector not trained!")
         
+        if max_length is None:
+            max_length = self.max_length
+
         self.prior_net.eval()
         self.posterior_net.eval()
         
@@ -470,7 +468,7 @@ class ABCCoTVector(BaseCoTVectorMethod):
                 
                 # Encode question for r_Q
                 q_enc = self.tokenizer(
-                    question_prompt, return_tensors="pt", truncation=True, max_length=self.max_length)
+                    question_prompt, return_tensors="pt", truncation=True, max_length=max_length)
                 q_ids = q_enc["input_ids"].to(target_device)
                 q_mask = q_enc["attention_mask"].to(target_device)
                 
@@ -482,7 +480,7 @@ class ABCCoTVector(BaseCoTVectorMethod):
                 gated_z_star = self.gate * z_star.squeeze(0)
                 
                 gen_enc = self.tokenizer(
-                    gen_prompt, return_tensors="pt", truncation=True, max_length=self.max_length)
+                    gen_prompt, return_tensors="pt", truncation=True, max_length=max_length)
                 gen_ids = gen_enc["input_ids"].to(target_device)
                 gen_mask = gen_enc["attention_mask"].to(target_device)
                 input_len = gen_ids.shape[1]

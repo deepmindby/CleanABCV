@@ -90,6 +90,7 @@ class CoTEvaluator:
         temperature: float = 1.0,
         do_sample: bool = False,
         use_early_stopping: bool = False,
+        max_length: int = 2048,
     ):
         self.model_wrapper = model_wrapper
         self.tokenizer = tokenizer
@@ -98,6 +99,7 @@ class CoTEvaluator:
         self.temperature = temperature
         self.do_sample = do_sample
         self.is_thinking_model = model_wrapper.model_name in THINKING_MODELS
+        self.max_length = max_length
 
         # ---- Auto-adjust max_new_tokens for thinking models ----
         if self.is_thinking_model and max_new_tokens < QWEN3_MIN_NEW_TOKENS:
@@ -180,7 +182,7 @@ class CoTEvaluator:
         # Tokenize
         device = self.model_wrapper.device
         encoding = self.tokenizer(
-            prompt, return_tensors="pt", truncation=True, max_length=2048)
+            prompt, return_tensors="pt", truncation=True, max_length=self.max_length)
         input_ids = encoding["input_ids"].to(device)
         attention_mask = encoding["attention_mask"].to(device)
         input_len = input_ids.shape[1]
@@ -262,13 +264,13 @@ class CoTEvaluator:
 
 def run_baseline_evaluation(
     model_wrapper, tokenizer, test_samples, dataset_type,
-    max_new_tokens=512, num_beams=3, use_early_stopping=False,
+    max_new_tokens=512, num_beams=3, use_early_stopping=False, max_length=2048,
 ):
     """Run baseline evaluation (CoT prompting, no vector injection)."""
     evaluator = CoTEvaluator(
         model_wrapper=model_wrapper, tokenizer=tokenizer,
         dataset_type=dataset_type, max_new_tokens=max_new_tokens,
-        num_beams=num_beams, use_early_stopping=use_early_stopping,
+        num_beams=num_beams, use_early_stopping=use_early_stopping, max_length=max_length,
     )
     return evaluator.evaluate_dataset(test_samples, desc="Baseline")
 
@@ -276,13 +278,13 @@ def run_baseline_evaluation(
 def run_injection_evaluation(
     model_wrapper, tokenizer, test_samples, vector, layer_idx,
     dataset_type, scaling_factor=1.0, max_new_tokens=512,
-    num_beams=3, use_early_stopping=False,
+    num_beams=3, use_early_stopping=False, max_length=2048,
 ):
     """Run evaluation with CoT vector injection."""
     evaluator = CoTEvaluator(
         model_wrapper=model_wrapper, tokenizer=tokenizer,
         dataset_type=dataset_type, max_new_tokens=max_new_tokens,
-        num_beams=num_beams, use_early_stopping=use_early_stopping,
+        num_beams=num_beams, use_early_stopping=use_early_stopping, max_length=max_length,
     )
     return evaluator.evaluate_dataset(
         test_samples, vector=vector, layer_idx=layer_idx,
